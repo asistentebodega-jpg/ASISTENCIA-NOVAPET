@@ -1619,6 +1619,87 @@
       .section, .kpi { box-shadow: none; break-inside: avoid; }
       .table-wrap { max-height: none; overflow: visible; }
     }
+
+    /* ── Cloud Sync Modal ── */
+    .cloud-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(20, 50, 35, 0.45);
+      backdrop-filter: blur(3px);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .cloud-overlay.open { display: flex; }
+    .cloud-modal {
+      background: #fff;
+      border: 1px solid #d7e7dd;
+      border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(26, 82, 49, 0.18);
+      padding: 28px 30px 24px;
+      width: 520px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+    }
+    .cloud-modal h2 { margin: 0 0 6px; font-size: 18px; color: #21372d; }
+    .cloud-modal p { margin: 0 0 16px; color: #66786e; font-size: 13px; line-height: 1.5; }
+    .cloud-modal ol { margin: 0 0 16px; padding-left: 18px; color: #66786e; font-size: 13px; line-height: 1.9; }
+    .cloud-modal ol li strong { color: #21372d; }
+    .cloud-modal code {
+      display: block;
+      background: #f0faf4;
+      border: 1px solid #c5e0ce;
+      border-radius: 7px;
+      padding: 10px 12px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 11.5px;
+      color: #1a4d2e;
+      white-space: pre;
+      overflow-x: auto;
+      margin: 8px 0 16px;
+      line-height: 1.55;
+    }
+    .cloud-label { font-weight: 700; font-size: 12px; color: #3a5a46; margin-bottom: 4px; display: block; }
+    .cloud-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .cloud-input-row .field { flex: 1; font-size: 12px; }
+    .cloud-status {
+      min-height: 22px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      display: none;
+    }
+    .cloud-status.ok { display: block; background: #e7f7ee; color: #168050; }
+    .cloud-status.error { display: block; background: #fff0ee; color: #b94038; }
+    .cloud-status.loading { display: block; background: #fff8e7; color: #a96f15; }
+    .cloud-btn-row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 8px; }
+    .sync-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #66786e;
+      padding: 2px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid #d7e7dd;
+      background: #f7fbf8;
+      transition: background 160ms;
+      white-space: nowrap;
+    }
+    .sync-indicator:hover { background: #eaf6ee; border-color: #b9d9c7; }
+    .sync-indicator .dot {
+      width: 7px; height: 7px; border-radius: 50%; background: #ccc; flex-shrink: 0;
+    }
+    .sync-indicator.synced .dot { background: #00b050; }
+    .sync-indicator.syncing .dot { background: #f59e0b; animation: pulse 1s infinite; }
+    .sync-indicator.error .dot { background: #b94038; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   </style>
 </head>
 <body>
@@ -1640,11 +1721,75 @@
         </div>
       </section>
       <div class="actions">
+        <button class="sync-indicator" id="syncIndicator" type="button" title="Sincronización en la nube">
+          <span class="dot"></span><span id="syncLabel">Sin nube</span>
+        </button>
         <button class="btn" id="resetFilters" type="button">Limpiar filtros</button>
         <button class="btn" id="restoreData" type="button">Restaurar</button>
         <button class="btn primary" id="exportFile" type="button">Exportar</button>
       </div>
     </header>
+
+  <!-- Cloud Sync Modal -->
+  <div class="cloud-overlay" id="cloudOverlay">
+    <div class="cloud-modal">
+      <h2>&#9729;&#65039; Sincronizacion en la nube</h2>
+      <p>Conecta con Google Sheets para que los datos se guarden en la nube y puedas abrir la app desde cualquier PC.</p>
+      <ol>
+        <li>Ve a <strong>script.google.com</strong> y crea un nuevo proyecto.</li>
+        <li>Borra el codigo existente y pega este script completo:</li>
+      </ol>
+      <code id="scriptCode">const SHEET_NAME = "novapet";
+
+function doGet(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet()
+      || SpreadsheetApp.create(SHEET_NAME);
+    let sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+    const cell = sheet.getRange("A1").getValue();
+    return ContentService.createTextOutput(cell || "null")
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({error: err.message}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet()
+      || SpreadsheetApp.create(SHEET_NAME);
+    let sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+    sheet.getRange("A1").setValue(e.postData.contents);
+    return ContentService.createTextOutput(JSON.stringify({ok: true}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({error: err.message}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}</code>
+      <ol start="3">
+        <li>Haz clic en <strong>Implementar &rarr; Nueva implementacion</strong>.</li>
+        <li>Tipo: <strong>Aplicacion web</strong>. Ejecutar como: <strong>Yo</strong>. Acceso: <strong>Cualquier persona</strong>.</li>
+        <li>Autoriza el acceso y copia la <strong>URL de implementacion</strong>.</li>
+        <li>Pega esa URL abajo y haz clic en <strong>Conectar</strong>.</li>
+      </ol>
+      <label class="cloud-label">URL de implementacion de Google Apps Script</label>
+      <div class="cloud-input-row">
+        <input class="field" id="cloudUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+        <button class="btn primary" id="cloudConnect" type="button">Conectar</button>
+      </div>
+      <div class="cloud-status" id="cloudStatus"></div>
+      <div class="cloud-btn-row">
+        <button class="btn" id="cloudUpload" type="button" style="display:none">Subir datos locales a la nube</button>
+        <button class="btn" id="cloudDownload" type="button" style="display:none">Descargar datos desde la nube</button>
+        <button class="btn" id="cloudDisconnect" type="button" style="display:none;color:#b94038">Desconectar</button>
+        <button class="btn" id="cloudClose" type="button">Cerrar</button>
+      </div>
+    </div>
+  </div>
 
     <nav class="month-tabs" id="monthTabs" aria-label="Meses"></nav>
 
@@ -1964,12 +2109,153 @@
       month.totals = totals;
     }
 
+    // ── Cloud Sync ──────────────────────────────────────────────
+    const CLOUD_URL_KEY = "novapet-cloud-url";
+
+    function getCloudUrl() {
+      return localStorage.getItem(CLOUD_URL_KEY) || "";
+    }
+
+    function setSyncIndicator(state) {
+      const el = $("syncIndicator");
+      const label = $("syncLabel");
+      if (!el) return;
+      el.className = "sync-indicator " + (state || "");
+      if (state === "synced") label.textContent = "Nube activa";
+      else if (state === "syncing") label.textContent = "Sincronizando…";
+      else if (state === "error") label.textContent = "Error nube";
+      else label.textContent = "Sin nube";
+    }
+
+    async function cloudSave(data) {
+      const url = getCloudUrl();
+      if (!url) return false;
+      setSyncIndicator("syncing");
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          body: JSON.stringify(data),
+          headers: { "Content-Type": "text/plain" }
+        });
+        const json = await res.json();
+        if (json.ok) { setSyncIndicator("synced"); return true; }
+        setSyncIndicator("error"); return false;
+      } catch {
+        setSyncIndicator("error"); return false;
+      }
+    }
+
+    async function cloudLoad() {
+      const url = getCloudUrl();
+      if (!url) return null;
+      setSyncIndicator("syncing");
+      try {
+        const res = await fetch(url + "?t=" + Date.now());
+        const text = await res.text();
+        const data = JSON.parse(text);
+        if (data && Array.isArray(data.months)) {
+          setSyncIndicator("synced");
+          return data;
+        }
+        setSyncIndicator("synced");
+        return null;
+      } catch {
+        setSyncIndicator("error");
+        return null;
+      }
+    }
+
+    // ── Cloud Modal Logic ─────────────────────────────────────
+    function openCloudModal() {
+      const url = getCloudUrl();
+      $("cloudUrl").value = url;
+      $("cloudStatus").className = "cloud-status";
+      $("cloudStatus").textContent = "";
+      const hasUrl = !!url;
+      $("cloudUpload").style.display = hasUrl ? "" : "none";
+      $("cloudDownload").style.display = hasUrl ? "" : "none";
+      $("cloudDisconnect").style.display = hasUrl ? "" : "none";
+      $("cloudOverlay").classList.add("open");
+    }
+
+    function closeCloudModal() {
+      $("cloudOverlay").classList.remove("open");
+    }
+
+    function setCloudModalStatus(msg, type) {
+      const el = $("cloudStatus");
+      el.textContent = msg;
+      el.className = "cloud-status " + type;
+    }
+
+    $("syncIndicator").addEventListener("click", openCloudModal);
+    $("cloudClose").addEventListener("click", closeCloudModal);
+    $("cloudOverlay").addEventListener("click", (e) => {
+      if (e.target === $("cloudOverlay")) closeCloudModal();
+    });
+
+    $("cloudDisconnect").addEventListener("click", () => {
+      if (!confirm("Desconectar la nube? Los datos locales no se borran.")) return;
+      localStorage.removeItem(CLOUD_URL_KEY);
+      setSyncIndicator("");
+      closeCloudModal();
+    });
+
+    $("cloudConnect").addEventListener("click", async () => {
+      const url = $("cloudUrl").value.trim();
+      if (!url.startsWith("https://script.google.com")) {
+        setCloudModalStatus("URL invalida. Debe ser una URL de Google Apps Script.", "error");
+        return;
+      }
+      setCloudModalStatus("Probando conexion…", "loading");
+      try {
+        const res = await fetch(url + "?t=" + Date.now());
+        const text = await res.text();
+        JSON.parse(text); // validate JSON
+        localStorage.setItem(CLOUD_URL_KEY, url);
+        setSyncIndicator("synced");
+        $("cloudUpload").style.display = "";
+        $("cloudDownload").style.display = "";
+        $("cloudDisconnect").style.display = "";
+        setCloudModalStatus("Conexion exitosa! Ahora usa Subir o Descargar para sincronizar.", "ok");
+      } catch(err) {
+        setCloudModalStatus("No se pudo conectar. Verifica que la URL sea correcta y que el acceso sea publico.", "error");
+        setSyncIndicator("error");
+      }
+    });
+
+    $("cloudUpload").addEventListener("click", async () => {
+      setCloudModalStatus("Subiendo datos a la nube…", "loading");
+      const ok = await cloudSave(report);
+      if (ok) setCloudModalStatus("Datos subidos correctamente a la nube.", "ok");
+      else setCloudModalStatus("Error al subir. Verifica la URL.", "error");
+    });
+
+    $("cloudDownload").addEventListener("click", async () => {
+      setCloudModalStatus("Descargando desde la nube…", "loading");
+      const data = await cloudLoad();
+      if (data) {
+        report = data;
+        normalizeReportDays();
+        report.months.forEach(recalcMonth);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(report));
+        state.monthIndex = Math.max(0, report.months.length - 1);
+        render();
+        setCloudModalStatus("Datos descargados y aplicados correctamente.", "ok");
+      } else {
+        setCloudModalStatus("No se encontraron datos en la nube, o hubo un error.", "error");
+      }
+    });
+
+    // ── Persist (local + cloud) ───────────────────────────────
     function persist() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(report));
       const saveState = $("saveState");
       if (!saveState) return;
       saveState.textContent = "Guardado";
       saveState.classList.remove("pending");
+      // Auto-sync to cloud if connected
+      if (getCloudUrl()) cloudSave(report);
     }
 
     function markSavedSoon() {
@@ -3109,6 +3395,7 @@
       if (!confirm("Restaurar los datos originales del Excel?")) return;
       localStorage.removeItem(STORAGE_KEY);
       report = structuredClone(BASE_REPORT);
+      if (getCloudUrl()) cloudSave(report);
       normalizeReportDays();
       report.months.forEach(recalcMonth);
       state.monthIndex = Math.max(0, report.months.length - 1);
@@ -3136,6 +3423,25 @@
     report.months.forEach(recalcMonth);
     renderMeta();
     render();
+
+    // Init cloud indicator and auto-load from cloud on startup
+    (async () => {
+      const url = getCloudUrl();
+      if (!url) { setSyncIndicator(""); return; }
+      setSyncIndicator("syncing");
+      try {
+        const data = await cloudLoad();
+        if (data) {
+          report = data;
+          normalizeReportDays();
+          report.months.forEach(recalcMonth);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(report));
+          state.monthIndex = Math.max(0, report.months.length - 1);
+          render();
+          setSyncIndicator("synced");
+        }
+      } catch { setSyncIndicator("error"); }
+    })();
   </script>
 </body>
 </html>
