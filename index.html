@@ -1724,8 +1724,7 @@
         <button class="sync-indicator" id="syncIndicator" type="button" title="Sincronización en la nube">
           <span class="dot"></span><span id="syncLabel">Sin nube</span>
         </button>
-        <button class="btn" id="resetFilters" type="button">Limpiar filtros</button>
-        <button class="btn" id="restoreData" type="button">Restaurar</button>
+        <button class="btn" id="saveCloudTop" type="button">Guardar nube</button>
         <button class="btn primary" id="exportFile" type="button">Exportar</button>
       </div>
     </header>
@@ -1897,7 +1896,6 @@ function doPost(e) {
               <h2>Trabajadores</h2>
               <p id="workersSubtitle"></p>
             </div>
-            <button class="btn collapse-btn" id="toggleWorkers" type="button" aria-expanded="true">Contraer</button>
           </div>
           <div class="worker-tools" id="workerTools">
             <input class="field" id="workerName" type="text" placeholder="Nombre del trabajador">
@@ -1959,7 +1957,7 @@ function doPost(e) {
       selectedEmployeeIndex: null,
       selectedDayIndex: null,
       commentsCollapsed: false,
-      workersCollapsed: false,
+      workersCollapsed: true,
     };
 
     const moneyless = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 });
@@ -2111,9 +2109,85 @@ function doPost(e) {
 
     // ── Cloud Sync ──────────────────────────────────────────────
     const CLOUD_URL_KEY = "novapet-cloud-url";
+    const CLOUD_DISABLED_KEY = "novapet-cloud-disabled";
+    const DEFAULT_CLOUD_URL = "https://script.google.com/macros/s/AKfycby2ql74Qg_L41FgVZVJ1aECUFuSW8bE-kjI-eqfxKZtSDJUrfgYpST3OLd-lCMNNxKp/exec";
 
     function getCloudUrl() {
-      return localStorage.getItem(CLOUD_URL_KEY) || "";
+      if (localStorage.getItem(CLOUD_DISABLED_KEY) === "1") return "";
+      return localStorage.getItem(CLOUD_URL_KEY) || DEFAULT_CLOUD_URL;
+    }
+
+    function isCloudScriptUrl(value) {
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" &&
+          url.hostname === "script.google.com" &&
+          url.pathname.startsWith("/macros/s/") &&
+          url.pathname.endsWith("/exec");
+      } catch {
+        return false;
+      }
+    }
+
+    function isValidCloudReport(data) {
+      return data && Array.isArray(data.months) && data.months.length > 0;
+    }
+
+    function bytesToBase64(bytes) {
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      }
+      return btoa(binary);
+    }
+
+    function base64ToBytes(value) {
+      const binary = atob(value);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    async function gzipText(text) {
+      if (!("CompressionStream" in window)) return null;
+      const stream = new Blob([text], { type: "text/plain" }).stream()
+        .pipeThrough(new CompressionStream("gzip"));
+      const buffer = await new Response(stream).arrayBuffer();
+      return bytesToBase64(new Uint8Array(buffer));
+    }
+
+    async function gunzipText(payload) {
+      if (!("DecompressionStream" in window)) return null;
+      const stream = new Blob([base64ToBytes(payload)], { type: "application/gzip" }).stream()
+        .pipeThrough(new DecompressionStream("gzip"));
+      return new Response(stream).text();
+    }
+
+    async function encodeCloudPayload(data) {
+      const text = JSON.stringify(data);
+      const payload = await gzipText(text);
+      if (!payload && text.length > 45000) {
+        throw new Error("El navegador no soporta compresion para guardar en la nube.");
+      }
+      if (!payload) return text;
+      return JSON.stringify({
+        novapetCloud: 1,
+        encoding: "gzip-base64",
+        payload,
+      });
+    }
+
+    async function decodeCloudPayload(text) {
+      const data = JSON.parse(text);
+      if (data && data.novapetCloud === 1 && data.encoding === "gzip-base64" && data.payload) {
+        const decoded = await gunzipText(data.payload);
+        if (!decoded) throw new Error("No se pudo descomprimir la nube.");
+        return JSON.parse(decoded);
+      }
+      return data;
     }
 
     function setSyncIndicator(state) {
@@ -2132,13 +2206,15 @@ function doPost(e) {
       if (!url) return false;
       setSyncIndicator("syncing");
       try {
+        const body = await encodeCloudPayload(data);
         const res = await fetch(url, {
           method: "POST",
-          body: JSON.stringify(data),
+          body,
           headers: { "Content-Type": "text/plain" }
         });
-        const json = await res.json();
-        if (json.ok) { setSyncIndicator("synced"); return true; }
+        const text = await res.text();
+        const json = JSON.parse(text);
+        if (res.ok && json.ok) { setSyncIndicator("synced"); return true; }
         setSyncIndicator("error"); return false;
       } catch {
         setSyncIndicator("error"); return false;
@@ -2152,12 +2228,12 @@ function doPost(e) {
       try {
         const res = await fetch(url + "?t=" + Date.now());
         const text = await res.text();
-        const data = JSON.parse(text);
-        if (data && Array.isArray(data.months)) {
+        const data = await decodeCloudPayload(text);
+        if (isValidCloudReport(data)) {
           setSyncIndicator("synced");
           return data;
         }
-        setSyncIndicator("synced");
+        setSyncIndicator(data === null ? "synced" : "error");
         return null;
       } catch {
         setSyncIndicator("error");
@@ -2197,13 +2273,14 @@ function doPost(e) {
     $("cloudDisconnect").addEventListener("click", () => {
       if (!confirm("Desconectar la nube? Los datos locales no se borran.")) return;
       localStorage.removeItem(CLOUD_URL_KEY);
+      localStorage.setItem(CLOUD_DISABLED_KEY, "1");
       setSyncIndicator("");
       closeCloudModal();
     });
 
     $("cloudConnect").addEventListener("click", async () => {
       const url = $("cloudUrl").value.trim();
-      if (!url.startsWith("https://script.google.com")) {
+      if (!isCloudScriptUrl(url)) {
         setCloudModalStatus("URL invalida. Debe ser una URL de Google Apps Script.", "error");
         return;
       }
@@ -2213,6 +2290,7 @@ function doPost(e) {
         const text = await res.text();
         JSON.parse(text); // validate JSON
         localStorage.setItem(CLOUD_URL_KEY, url);
+        localStorage.removeItem(CLOUD_DISABLED_KEY);
         setSyncIndicator("synced");
         $("cloudUpload").style.display = "";
         $("cloudDownload").style.display = "";
@@ -2246,6 +2324,34 @@ function doPost(e) {
         setCloudModalStatus("No se encontraron datos en la nube, o hubo un error.", "error");
       }
     });
+
+    async function saveCloudNow(button = null) {
+      const previousText = button ? button.textContent : "";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Guardando...";
+      }
+      localStorage.removeItem(CLOUD_DISABLED_KEY);
+      if (!localStorage.getItem(CLOUD_URL_KEY)) {
+        localStorage.setItem(CLOUD_URL_KEY, DEFAULT_CLOUD_URL);
+      }
+      normalizeReportDays();
+      report.months.forEach(recalcMonth);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(report));
+      const ok = await cloudSave(report);
+      const saveState = $("saveState");
+      if (saveState) {
+        saveState.textContent = ok ? "Nube guardada" : "Error nube";
+        saveState.classList.toggle("pending", !ok);
+      }
+      if (button) {
+        button.textContent = ok ? "Guardado" : "Error nube";
+        window.setTimeout(() => {
+          button.disabled = false;
+          button.textContent = previousText;
+        }, 1600);
+      }
+    }
 
     // ── Persist (local + cloud) ───────────────────────────────
     function persist() {
@@ -2842,10 +2948,9 @@ function doPost(e) {
       const selected = $("deleteWorkerSelect")?.value || "";
       const workers = activeEmployees(month);
       $("workersSubtitle").textContent = moneyless.format(workers.length) + " registrados en este corte";
-      $("workersPanel").classList.toggle("is-collapsed", state.workersCollapsed);
-      $("workerTools").hidden = state.workersCollapsed;
-      $("toggleWorkers").textContent = state.workersCollapsed ? "Mostrar" : "Contraer";
-      $("toggleWorkers").setAttribute("aria-expanded", String(!state.workersCollapsed));
+      state.workersCollapsed = true;
+      $("workersPanel").classList.add("is-collapsed");
+      $("workerTools").hidden = true;
       $("deleteWorkerSelect").innerHTML = workers.length
         ? workers.map((employee) => (
           '<option value="' + escapeHtml(employeeKey(employee)) + '">' +
@@ -3328,21 +3433,8 @@ function doPost(e) {
       state.commentPerson = event.target.value;
       render();
     });
-    $("resetFilters").addEventListener("click", () => {
-      state.query = "";
-      state.status = "all";
-      state.rate = "all";
-      state.commentQuery = "";
-      state.commentPerson = "all";
-      state.commentStatusCode = "";
-      state.commentDraftEmployeeIndex = null;
-      state.commentDraftDateIso = "";
-      $("searchInput").value = "";
-      $("statusFilter").value = "all";
-      $("rateFilter").value = "all";
-      $("commentSearch").value = "";
-      $("commentFilter").value = "all";
-      render();
+    $("saveCloudTop").addEventListener("click", (event) => {
+      saveCloudNow(event.currentTarget);
     });
     $("applyAttendance").addEventListener("click", () => {
       setAttendance($("editEmployee").value, $("editDay").value, $("editStatus").value);
@@ -3378,10 +3470,6 @@ function doPost(e) {
       state.commentsCollapsed = !state.commentsCollapsed;
       renderComments(buildCutoffPeriod());
     });
-    $("toggleWorkers").addEventListener("click", () => {
-      state.workersCollapsed = !state.workersCollapsed;
-      renderWorkers(buildCutoffPeriod());
-    });
     $("addWorker").addEventListener("click", addWorker);
     $("deleteWorker").addEventListener("click", deleteWorker);
     $("workerName").addEventListener("keydown", (event) => {
@@ -3391,32 +3479,6 @@ function doPost(e) {
       if (event.key === "Enter") addWorker();
     });
     $("addMonth").addEventListener("click", addMonth);
-    $("restoreData").addEventListener("click", () => {
-      if (!confirm("Restaurar los datos originales del Excel?")) return;
-      localStorage.removeItem(STORAGE_KEY);
-      report = structuredClone(BASE_REPORT);
-      if (getCloudUrl()) cloudSave(report);
-      normalizeReportDays();
-      report.months.forEach(recalcMonth);
-      state.monthIndex = Math.max(0, report.months.length - 1);
-      state.query = "";
-      state.status = "all";
-      state.rate = "all";
-      state.commentQuery = "";
-      state.commentPerson = "all";
-      state.commentStatusCode = "";
-      state.commentDraftEmployeeIndex = null;
-      state.commentDraftDateIso = "";
-      state.selectedEmployeeIndex = null;
-      state.selectedDayIndex = null;
-      $("searchInput").value = "";
-      $("statusFilter").value = "all";
-      $("rateFilter").value = "all";
-      $("newMonth").value = "";
-      render();
-      const saveState = $("saveState");
-      if (saveState) saveState.textContent = "Restaurado";
-    });
     $("exportFile").addEventListener("click", exportCurrentMonth);
 
     normalizeReportDays();
@@ -3428,16 +3490,19 @@ function doPost(e) {
     (async () => {
       const url = getCloudUrl();
       if (!url) { setSyncIndicator(""); return; }
+      const hasLocalData = isValidCloudReport(report);
       setSyncIndicator("syncing");
       try {
         const data = await cloudLoad();
-        if (data) {
+        if (data && !hasLocalData) {
           report = data;
           normalizeReportDays();
           report.months.forEach(recalcMonth);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(report));
           state.monthIndex = Math.max(0, report.months.length - 1);
           render();
+          setSyncIndicator("synced");
+        } else if (data) {
           setSyncIndicator("synced");
         }
       } catch { setSyncIndicator("error"); }
